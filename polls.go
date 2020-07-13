@@ -28,6 +28,11 @@ func (s *Server) handlePolls(w http.ResponseWriter, r *http.Request) {
 	case "DELETE":
 		s.handlePollsDelete(w, r)
 		return
+	case "OPTIONS":
+		// allow delete over CORS
+		w.Header().Add("Access-Control-Allow-Methods", "DELETE")
+		respond(w, r, http.StatusOK, nil)
+		return
 	}
 	// not found
 	respondHTTPErr(w, r, http.StatusNotFound)
@@ -44,15 +49,15 @@ func (s *Server) handlePollsGet(w http.ResponseWriter, r *http.Request) {
 
 	// create an object referring to the polls collection
 	c := session.DB("ballots").C("polls")
+
+	// parse the url path into an instance of the Path type
 	p := NewPath(r.URL.Path)
 
 	// build an mgo.Query object by parsing the path
 	if p.HasID() {
-		// get specific poll
-		q = c.FindId(bson.ObjectIdHex(p.ID))
+		q = c.FindId(bson.ObjectIdHex(p.ID)) // get a specific poll
 	} else {
-		// get all polls
-		q = c.Find(nil)
+		q = c.Find(nil)	// get all polls
 	}
 	if err := q.All(&result); err != nil {
 		respondErr(w, r, http.StatusInternalServerError, errors.New("not implemented"))
@@ -61,17 +66,62 @@ func (s *Server) handlePollsGet(w http.ResponseWriter, r *http.Request) {
 	respond(w, r, http.StatusOK, &result)
 }
 
+// Creating a poll
 func (s *Server) handlePollsPost(w http.ResponseWriter, r *http.Request) {
+	var p poll
 
 	// create a copy of the database connection
 	session := s.db.Copy()
 	defer session.Close()
 
-	// create object refer
+	// create object referring to the polls collection
+	c := session.DB("ballots").C("polls")
 
-	respondErr(w, r, http.StatusInternalServerError, errors.New("not implemented"))
+	// read the request body and store the value into &p
+	if err := decodeBody(r, &p); err != nil {
+		respondErr(w, r, http.StatusBadRequest, "failed to read poll from request", err)
+	}
+
+	// Extract the apiKey
+	apiKey, ok := APIKey(r.Context())
+	if ok {
+		p.APIKey = apiKey
+	}
+	p.ID = bson.NewObjectId()
+	if err := c.Insert(p); err != nil {
+		respondErr(w, r, http.StatusInternalServerError, "failed to insert poll", err)
+		return
+	}
+
+	// point to the URL to access the newly created poll
+	w.Header().Set("Location", "polls/"+p.ID.Hex())
+	respond(w, r, http.StatusCreated, nil)
 }
 
+// Deleting a poll
 func (s *Server) handlePollsDelete(w http.ResponseWriter, r *http.Request) {
-	respondErr(w, r, http.StatusInternalServerError, errors.New("not implemented"))
+
+	// create a copy of the database connection
+	session := s.db.Copy()
+	defer session.Close()
+
+	// create an on=bject referring to the polls collection
+	c := session.DB("ballots").C("polls")
+
+	// parse the url path into an instance of the Path type
+	p := NewPath(r.URL.Path)
+
+	// check if the parsed path points to a poll
+	// prevent deletion of all polls
+	if !p.HasID() {
+		respondErr(w, r, http.StatusMethodNotAllowed, "Cannot delete all polls!")
+		return
+	}
+
+	// delete the poll with the given id and handle any errors
+	if err := c.RemoveId(bson.ObjectIdHex(p.ID)); err != nil{
+		respondErr(w, r, http.StatusInternalServerError, "failed to delete poll", err)
+		return
+	}
+	respond(w, r, http.StatusOK, nil)	
 }
