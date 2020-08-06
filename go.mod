@@ -1,4 +1,4 @@
-module github.com/olawolu
+module github.com/olawolu/rest-api
 
 go 1.14
 
